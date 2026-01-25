@@ -40,10 +40,27 @@
     const TIMEOUT_STEP_MS = 20;
     const DEFAULT_ELEMENT_TIMEOUT_MS = 10000;
 
-    function debugLog(...args) {
-        if (!DEBUG_MODE) return;
-        console.debug(...args);
-    }
+    const STYLES = {
+        title: 'font-weight: bold; font-size: 1.1em; color: #4FC3F7; margin-top: 0.5em;',
+        step: 'color: #90CAF9;',
+        success: 'color: #66BB6A; font-weight: bold;',
+        warn: 'color: #FFCA28;',
+        error: 'color: #EF5350; font-weight: bold;',
+        info: 'color: #BDBDBD;'
+    };
+
+    const Logger = {
+        log: (msg, style = '') => console.log(`%c${msg}`, style),
+        title: (msg) => console.log(`%c🚀 ${msg}`, STYLES.title),
+        step: (msg) => console.log(`%c  ➤ ${msg}`, STYLES.step),
+        success: (msg) => console.log(`%c  ✅ ${msg}`, STYLES.success),
+        warn: (msg) => console.warn(`%c  ⚠️ ${msg}`, STYLES.warn),
+        error: (msg) => console.error(`%c  ❌ ${msg}`, STYLES.error),
+        info: (msg) => console.log(`%c     ${msg}`, STYLES.info),
+        debug: (...args) => {
+            if (DEBUG_MODE) console.debug('%c[DEBUG]', 'color: #757575;', ...args);
+        }
+    };
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,10 +78,25 @@
     function click(element) {
         if (!element) return;
         element.scrollIntoView({ block: 'center' });
-        element.click(); // Try native click first
-        const event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-        element.dispatchEvent(event);
-        debugLog(element, 'clicked');
+        if (typeof element.click === 'function') {
+            element.click();
+        } else {
+            const event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            element.dispatchEvent(event);
+        }
+        Logger.debug(element, 'clicked');
+    }
+
+    async function waitForElementToDisappear(selector, baseEl = document, timeoutMs = DEFAULT_ELEMENT_TIMEOUT_MS) {
+        let timeout = timeoutMs;
+        while (timeout > 0) {
+            let element = baseEl.querySelector(selector);
+            if (element === null) return true; // Disappeared
+            await sleep(TIMEOUT_STEP_MS);
+            timeout -= TIMEOUT_STEP_MS;
+        }
+        console.warn(`Element ${selector} did not disappear within ${timeoutMs}ms`);
+        return false;
     }
 
     // ----------------------------------
@@ -93,7 +125,11 @@
             const btn = await waitForElement(DIALOG_CLOSE_BUTTON_SELECTOR);
             if (btn) {
                 click(btn);
-                debugLog('Closed success dialog');
+                Logger.success('Closed success dialog');
+                // Wait for the dialog to actually go away to prevent clicking under it
+                await waitForElementToDisappear(DIALOG_CLOSE_BUTTON_SELECTOR);
+            } else {
+                Logger.warn('Success dialog Close button not found - likely already closed or never appeared');
             }
         }
     }
@@ -106,14 +142,14 @@
             const options = group.querySelectorAll(RADIO_BUTTON_SELECTOR);
             const index = VISIBILITY_PUBLISH_ORDER[VISIBILITY];
             click(options[index]);
-            debugLog(`Visibility set to ${VISIBILITY}`);
+            Logger.step(`Visibility set to ${VISIBILITY}`);
             await sleep(500);
         }
 
         async save() {
             const saveBtn = await waitForElement(SAVE_BUTTON_SELECTOR, this.raw);
             click(saveBtn);
-            debugLog('Save button clicked');
+            Logger.step('Save button clicked');
             await sleep(2000);
             return new SuccessDialog(document.body);
         }
@@ -151,19 +187,39 @@
         const rows = [...document.querySelectorAll(VIDEO_ROW_SELECTOR)];
         const editableVideos = rows.filter(row => row.innerText.includes('Draft'));
 
-        debugLog(`Found ${editableVideos.length} drafts`);
+        Logger.title(`Found ${editableVideos.length} drafts to publish...`);
+        Logger.info(`Visibility: ${VISIBILITY}`);
 
+        let count = 0;
         for (let rowEl of editableVideos) {
-            const video = new VideoRow(rowEl);
-            const draft = await video.openDraft();
-            await draft.selectMadeForKids();
-            const visibility = await draft.goToVisibility();
-            await visibility.setVisibility();
-            const success = await visibility.save();
-            await success.close();
-            await sleep(1000); // Cooldown between videos
+            count++;
+            const videoTitle = rowEl.querySelector(DRAFT_BUTTON_SELECTOR)?.innerText || 'Unknown Video';
+            Logger.title(`[${count}/${editableVideos.length}] Processing: ${videoTitle}`);
+
+            try {
+                const video = new VideoRow(rowEl);
+                const draft = await video.openDraft();
+
+                Logger.step('Setting Made For Kids...');
+                await draft.selectMadeForKids();
+
+                Logger.step('Moving to Visibility settings...');
+                const visibility = await draft.goToVisibility();
+
+                await visibility.setVisibility();
+                const success = await visibility.save();
+
+                Logger.step('Closing success dialog...');
+                await success.close();
+
+                Logger.success('Published!');
+                await sleep(1000); // Cooldown between videos
+            } catch (e) {
+                Logger.error(`Failed to publish "${videoTitle}": ${e.message}`);
+                console.error(e);
+            }
         }
-        console.log("Finished publishing drafts.");
+        Logger.title("🎉 Finished publishing drafts.");
     }
 
     // ENTRY POINT
